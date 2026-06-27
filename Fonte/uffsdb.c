@@ -19,7 +19,11 @@
 #ifndef FDATABASE
    #include "database.h"
 #endif
-
+// ALTERAÇÃO **
+#ifndef FBUFFER
+   #include "buffer.h"
+#endif
+// ALTERAÇÃO **
 #include "interface/y.tab.h"
 
 
@@ -27,6 +31,9 @@ db_connected connected;
 
 int main(){
     dbInit(NULL);
+    // ALTERAÇÃO **
+    initBufferManager(); // inicia o BM
+    // ALTERAÇÃO **
     
     printf("uffsdb (16.2).\nType \"help\" for help or \"implement\" for seeing what is or not is implemented in this project.\n\n");
     

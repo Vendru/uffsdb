@@ -55,11 +55,24 @@ typedef struct tp_buffer{ // Estrutura utilizada para armazenar o buffer.
     unsigned int id;        // posição do bloco no arquivo em relação aos outros blocos [0,1,2,...[
     unsigned int nrec;       //Número de registros armazenados na página.
     uint32_t position;   // Número da quantidade de registro que a página ainda pode receber;
-    // TODO: Separar a struct o que precisar ser persistida e o que fica na memória
-    unsigned char db;        //Dirty bit
-    unsigned char pc;        //Pin counter
     char data[SIZE];         // Dados
 }tp_buffer;
+
+// ALTERAÇÃO **
+
+typedef struct tp_metadados { // Estrutura utilizada para armazenar os metadados (Fica apenas na RAM).
+    int table_id;            // Id da tabela qual a pag pertence
+    unsigned char db;        // Dirty bit (1 = alterado, 0 = limpo)
+    unsigned char pc;        // Pin counter (quantas operações estão usando)
+    long last_used_timestamp; // P/ usar LRU
+} tp_metadados;
+
+typedef struct bm { // Estrutura do Gerenciador de Buffer (Buffer Manager)
+    tp_buffer pages[BM_PAGES]; // Array de páginas (os dados em si)
+    tp_metadados md[BM_PAGES]; // Array paralelo de metadados correspondentes
+} tp_bm;
+
+// ALTERAÇÃO **
 
 typedef struct rc_insert {
     char    *objName;           // Nome do objeto (tabela, banco de dados, etc...)

@@ -32,7 +32,7 @@ int colocaTuplaBuffer(tp_buffer *buffer, int from, tp_table *campos, struct fs_o
     Esta função recebe um arquivo e o id do buffer,
     retorna o buffer carregado ou erro. toma toma.
 */
-tp_buffer *getBlock(unsigned int id, char* filename);
+tp_buffer *getBlock(unsigned int id, char* filename); // # trocar nome por id
 
 /*
     Retorna um buffer iniciado top top. 
@@ -73,3 +73,10 @@ void cria_campo(int , int , char *, int );
 int writeBufferToDisk(tp_buffer *bufferpool, struct fs_objects *objeto);
 
 void addColumn(column **colList, column *c);
+
+// ALTERAÇÃO **
+
+// Inicializa o Buffer Manager na memoria
+void initBufferManager();
+
+// ALTERAÇÃO **
