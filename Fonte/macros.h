@@ -47,9 +47,11 @@
 #define FK 2
 #define BT 3
 ////
-#define SIZE 1024                // Tamanho da página.
+#define SIZE 1024                // Tamanho da área de dados de uma página (fixo em tempo de compilação:
+                                 // o bloco em disco é sizeof(tp_buffer) e o fseek depende dele).
 #define PAGES 256              // Número de páginas.
-#define BM_PAGES 60            // ALTERAÇÂO**
+#define BM_DEFAULT_PAGES 60    // Número padrão de frames do Buffer Pool (pode ser sobrescrito na carga
+                               // do SGBD pela variável de ambiente UFFSDB_BM_PAGES).
 #define TAMANHO_NOME_CAMPO 40   // Tamanho do nome dos campos de uma tabela.
 #define TAMANHO_NOME_CONSTRAINT 40 // Tamanho do nome da constraint.
 #define TAMANHO_NOME_TABELA 20  // Tamanho do nome da tabela.

@@ -60,16 +60,16 @@ typedef struct tp_buffer{ // Estrutura utilizada para armazenar o buffer.
 
 // ALTERAÇÃO **
 
-typedef struct tp_metadados { // Estrutura utilizada para armazenar os metadados (Fica apenas na RAM).
-    int table_id;            // Id da tabela qual a pag pertence
-    unsigned char db;        // Dirty bit (1 = alterado, 0 = limpo)
-    unsigned char pc;        // Pin counter (quantas operações estão usando)
-    long last_used_timestamp; // P/ usar LRU
+typedef struct tp_metadados { // Metadados de um frame do Buffer Pool (vive APENAS na RAM).
+    int table_id;            // Id da tabela à qual a página pertence (-1 = frame vazio).
+    unsigned char db;        // Dirty bit (1 = alterado em memória, 0 = limpo/igual ao disco).
+    unsigned char pc;        // Pin counter (quantas operações estão usando o frame).
 } tp_metadados;
 
-typedef struct bm { // Estrutura do Gerenciador de Buffer (Buffer Manager)
-    tp_buffer pages[BM_PAGES]; // Array de páginas (os dados em si)
-    tp_metadados md[BM_PAGES]; // Array paralelo de metadados correspondentes
+typedef struct bm { // Buffer Manager: cabeçalho com metadados + o Buffer Pool em si.
+    int num_pages;           // Quantidade de frames do pool (configurável na carga do SGBD).
+    tp_buffer *pages;        // Buffer Pool: vetor de frames (os dados em si).
+    tp_metadados *md;        // Vetor paralelo de metadados de cada frame.
 } tp_bm;
 
 // ALTERAÇÃO **

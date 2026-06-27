@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "memoryContext.h"
 
 #ifndef FMACROS // garante que macros.h não seja reincluída
@@ -18,34 +19,63 @@ static int isDeleted(char *linha);
 
 // ALTERAÇÃO **
 
-// Variável global do Buffer Manager
+// Variável global do Buffer Manager (vive por toda a execução do SGBD).
 tp_bm *bm = NULL;
 
-// Contador global para a política de substituição LRU
-long lru_counter = 0;
+/*
+    Inicializa o Buffer Manager: aloca o cabeçalho, o Buffer Pool (vetor de frames)
+    e o vetor de metadados. numPages define quantos frames o pool terá; valores <= 0
+    caem no padrão BM_DEFAULT_PAGES.
 
-void initBufferManager() { // inicializa o bm
+    O pool é alocado com calloc (heap) e não pelos MemoryContext porque seu tamanho
+    (num_pages * sizeof(tp_buffer)) excede MEMORY_CONTEXT_SIZE. Assim ele persiste
+    entre as consultas e só é liberado em shutdownBufferManager().
+*/
+void initBufferManager(int numPages) {
+    if (bm != NULL) return; // já inicializado
+
+    if (numPages <= 0) numPages = BM_DEFAULT_PAGES;
+
+    bm = (tp_bm *)calloc(1, sizeof(tp_bm));
     if (bm == NULL) {
-        // Usa o contexto PERMANENT para o BM não ser deletado ao fim da query
-        bm = (tp_bm *)uffsllocType(sizeof(tp_bm), PERMANENT);
-        
-        if (bm == NULL) {
-            printf("ERROR: Falha ao alocar o Buffer Manager!\n");
-            return;
-        }
-
-        for (int i = 0; i < BM_PAGES; i++) {
-            bm->md[i].table_id = -1; // -1 indica que o frame está vazio
-            bm->md[i].pc = 0;
-            bm->md[i].db = 0;
-            bm->md[i].last_used_timestamp = 0;
-        }
+        printf("ERROR: Falha ao alocar o Buffer Manager!\n");
+        return;
     }
+
+    bm->num_pages = numPages;
+    bm->pages = (tp_buffer *)calloc(numPages, sizeof(tp_buffer));
+    bm->md    = (tp_metadados *)calloc(numPages, sizeof(tp_metadados));
+
+    if (bm->pages == NULL || bm->md == NULL) {
+        printf("ERROR: Falha ao alocar o Buffer Pool!\n");
+        free(bm->pages);
+        free(bm->md);
+        free(bm);
+        bm = NULL;
+        return;
+    }
+
+    for (int i = 0; i < bm->num_pages; i++) {
+        bm->md[i].table_id = -1; // -1 indica que o frame está vazio
+        bm->md[i].pc = 0;
+        bm->md[i].db = 0;
+    }
+
+    srand((unsigned int)time(NULL)); // semente para a substituição aleatória
 }
 
-void unpinBuffer(tp_buffer *buffer, int table_id) { // reduzir pc
+// Libera toda a memória do Buffer Manager (chamado ao encerrar o SGBD).
+void shutdownBufferManager() {
+    if (bm == NULL) return;
+    free(bm->pages);
+    free(bm->md);
+    free(bm);
+    bm = NULL;
+}
+
+void unpinBuffer(tp_buffer *buffer, int table_id) { // reduz o pin counter do frame
     if (bm == NULL || buffer == NULL) return;
-    for (int i = 0; i < BM_PAGES; i++) {
+    for (int i = 0; i < bm->num_pages; i++) {
         if (bm->pages[i].id == buffer->id && bm->md[i].table_id == table_id) {
             if (bm->md[i].pc > 0){
                 bm->md[i].pc--;
@@ -55,26 +85,66 @@ void unpinBuffer(tp_buffer *buffer, int table_id) { // reduzir pc
     }
 }
 
-int encontra_espaco_livre() { // encontra espaço livre no bm
-    if (bm == NULL) return -1;
-    for (int i = 0; i < BM_PAGES; i++) {
-        if (bm->md[i].pc == 0 && bm->md[i].table_id == -1) return i;
-    }
-    return -1; 
-}
-
-int encontra_lru() { // encontra o que foi usado a mais tempo
-    int index = -1;
-    long menor_tempo = -1;
-    for (int i = 0; i < BM_PAGES; i++) {
-        if (bm->md[i].pc == 0) {
-            if (index == -1 || bm->md[i].last_used_timestamp < menor_tempo) {
-                menor_tempo = bm->md[i].last_used_timestamp;
-                index = i;
-            }
+void markDirtyBuffer(tp_buffer *buffer, int table_id) { // marca o frame como modificado (dirty)
+    if (bm == NULL || buffer == NULL) return;
+    for (int i = 0; i < bm->num_pages; i++) {
+        if (bm->pages[i].id == buffer->id && bm->md[i].table_id == table_id) {
+            bm->md[i].db = 1;
+            return;
         }
     }
-    return index;
+}
+
+// Escreve um frame sujo de volta ao disco (write-back) usando o table_id dos metadados.
+static void flushFrame(int index) {
+    struct fs_objects obj = leObjetoById(bm->md[index].table_id);
+
+    // Tabela não encontrada: leObjetoById devolve um fs_objects não-inicializado.
+    // Aborta sem tocar no disco nem limpar o dirty bit, evitando usar obj.nArquivo
+    // com lixo (caminho inválido / estouro de buffer no strcat).
+    if (obj.cod != bm->md[index].table_id) return;
+
+    char filepath[LEN_DB_NAME_IO];
+    strcpy(filepath, connected.db_directory);
+    strcat(filepath, obj.nArquivo);
+
+    FILE *fd = fopen(filepath, "r+b");
+    if (!fd) return; // não abriu: mantém o frame sujo, não perde dado silenciosamente
+
+    long int pos = (long int)bm->pages[index].id * sizeof(tp_buffer);
+    fseek(fd, pos, SEEK_SET);
+    fwrite(&(bm->pages[index]), sizeof(tp_buffer), 1, fd);
+    fclose(fd);
+
+    bm->md[index].db = 0; // só agora a página está realmente limpa
+}
+
+// Procura um frame vazio (ainda não usado) no Buffer Pool.
+static int encontra_espaco_livre() {
+    if (bm == NULL) return -1;
+    for (int i = 0; i < bm->num_pages; i++) {
+        if (bm->md[i].table_id == -1) return i;
+    }
+    return -1;
+}
+
+// Política de substituição ALEATÓRIA: sorteia um frame não-fixado (pc == 0) para ser a vítima.
+static int encontra_vitima_aleatoria() {
+    int livres = 0;
+    for (int i = 0; i < bm->num_pages; i++) {
+        if (bm->md[i].pc == 0) livres++;
+    }
+
+    if (livres == 0) return -1; // todos os frames estão fixados (pin)
+
+    int escolhido = rand() % livres; // sorteia a n-ésima posição livre
+    for (int i = 0; i < bm->num_pages; i++) {
+        if (bm->md[i].pc == 0) {
+            if (escolhido == 0) return i;
+            escolhido--;
+        }
+    }
+    return -1; // não deve acontecer
 }
 
 // ALTERAÇÃO **
@@ -112,50 +182,34 @@ tp_buffer* initBuffer(unsigned int id){
 // ALTERAÇÃO **
 
 tp_buffer *getBlock(unsigned int id, char* filename, int table_id){
-    
+
     if (bm == NULL) {
         printf("ERROR: Buffer Manager não foi inicializado!\n");
         return NULL;
     }
 
-    lru_counter++; // O tempo "passou" para o algoritmo LRU
-
-    for (int i = 0; i < BM_PAGES; i++) {     // 1. BUSCA NA MEMÓRIA
-        if (bm->pages[i].id == id && bm->md[i].table_id == table_id) { // se está na memória
-            bm->md[i].pc++; // Incrementa quem está usando (Pin Count)
-            bm->md[i].last_used_timestamp = lru_counter; // Marca uso recente
-            return &(bm->pages[i]); // retorna a pagina
+    // 1. A página já está no Buffer Pool?
+    for (int i = 0; i < bm->num_pages; i++) {
+        if (bm->md[i].table_id == table_id && bm->pages[i].id == id) {
+            bm->md[i].pc++; // dá pin em quem está usando
+            return &(bm->pages[i]);
         }
     }
 
-    int index = encontra_espaco_livre();     // 2. NÃO ESTÁ NA MEMÓRIA
-    if (index == -1) {         // Buffer lotado, roda o LRU
-        index = encontra_lru();
-        
+    // 2. Não está: procura um frame vazio; se não houver, sorteia uma vítima (substituição aleatória).
+    int index = encontra_espaco_livre();
+    if (index == -1) {
+        index = encontra_vitima_aleatoria();
         if (index == -1) {
-            printf("ERROR: Buffer cheio e todas as páginas estão em uso (Deadlock)!\n");
-            return NULL; 
+            printf("ERROR: Buffer pool cheio e todos os frames estão fixados (pin)!\n");
+            return NULL;
         }
-
-        // Se a página antiga estiver suja (db = 1), deve ir para o disco antes de morrer
-        if (bm->md[index].db == 1) {
-            struct fs_objects obj_antigo = leObjetoById(bm->md[index].table_id);
-            char filepath[LEN_DB_NAME_IO];
-            strcpy(filepath, connected.db_directory);
-            strcat(filepath, obj_antigo.nArquivo);
-            
-            FILE *fd_old = fopen(filepath, "r+b"); 
-            if (fd_old) {
-                long int pos_old = (long int)bm->pages[index].id * sizeof(tp_buffer);
-                fseek(fd_old, pos_old, SEEK_SET);
-                fwrite(&(bm->pages[index]), sizeof(tp_buffer), 1, fd_old);
-                fclose(fd_old);
-            }
-            bm->md[index].db = 0; // Agora está limpa
-        }
+        // Write-back: se a vítima estiver suja, grava no disco antes de substituir.
+        if (bm->md[index].db == 1) flushFrame(index);
     }
 
-    FILE *fd = fopen(filename, "r+b"); // 3. Lê do disco para a posição encontrada no Buffer Pool
+    // 3. Lê o bloco do disco para o frame escolhido (somente o BM faz I/O).
+    FILE *fd = fopen(filename, "r+b");
     if (!fd) {
         printf("ERROR: failed to open %s\n", filename);
         return NULL;
@@ -163,14 +217,19 @@ tp_buffer *getBlock(unsigned int id, char* filename, int table_id){
 
     long int pos = (long int)id * sizeof(tp_buffer);
     fseek(fd, pos, SEEK_SET);
-    fread(&(bm->pages[index]), sizeof(tp_buffer), 1, fd); 
+    size_t lidos = fread(&(bm->pages[index]), sizeof(tp_buffer), 1, fd);
     fclose(fd);
 
-    // 4. ATUALIZA OS METADADOS DA NOVA PÁGINA
+    if (lidos != 1) {
+        // Bloco ainda não existe no disco: inicializa o frame em vez de manter lixo da vítima.
+        memset(&(bm->pages[index]), 0, sizeof(tp_buffer));
+    }
+    bm->pages[index].id = id; // garante coerência do índice usado na busca
+
+    // 4. Atualiza os metadados do novo frame.
     bm->md[index].table_id = table_id;
-    bm->md[index].db = 0; 
-    bm->md[index].pc = 1; // Quem pediu acabou de dar pin
-    bm->md[index].last_used_timestamp = lru_counter;
+    bm->md[index].db = 0;
+    bm->md[index].pc = 1; // quem pediu acabou de dar pin
 
     return &(bm->pages[index]);
 }
@@ -192,15 +251,22 @@ PageResult *getPage(tp_table *campos, struct fs_objects objeto, int page){
     tp_buffer *buffer = getBlock((unsigned int) page, directory, objeto.cod);
     // ALTERAÇÃO **
 
+    if (buffer == NULL)
+        return ERRO_PARAMETRO;
+
     tupla *tuplas = (tupla *)uffslloc(sizeof(tupla) * (buffer->nrec)); //Aloca a quantidade de tuplas necessária
 
-    if(!tuplas)
+    if(!tuplas) {
+        unpinBuffer(buffer, objeto.cod); // libera a página antes de sair
         return ERRO_DE_ALOCACAO;
+    }
 
     int  indiceTupla=0, i=0;
 
-    if (!buffer->position)
+    if (!buffer->position) {
+        unpinBuffer(buffer, objeto.cod); // libera a página antes de sair
         return NULL;
+    }
 
     char* nullos =(char *)uffslloc(objeto.qtdCampos * sizeof(char));
 
@@ -385,7 +451,7 @@ int writeBufferToDisk(tp_buffer *buffer, struct fs_objects *objeto) {
 
     // ALTERAÇÃO **
     // 2. Procura a página no Buffer Pool e avisa que ela agora está limpa
-    for (int i = 0; i < BM_PAGES; i++) {
+    for (int i = 0; i < bm->num_pages; i++) {
         if (bm->pages[i].id == buffer->id && bm->md[i].table_id == objeto->cod) {
             bm->md[i].db = 0; // A página foi salva, então o Dirty Bit volta a ser 0
             break;

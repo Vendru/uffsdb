@@ -32,7 +32,7 @@ int colocaTuplaBuffer(tp_buffer *buffer, int from, tp_table *campos, struct fs_o
     Esta função recebe um arquivo e o id do buffer,
     retorna o buffer carregado ou erro. toma toma.
 */
-tp_buffer *getBlock(unsigned int id, char* filename); // # trocar nome por id
+tp_buffer *getBlock(unsigned int id, char* filename, int table_id);
 
 /*
     Retorna um buffer iniciado top top. 
@@ -76,7 +76,19 @@ void addColumn(column **colList, column *c);
 
 // ALTERAÇÃO **
 
-// Inicializa o Buffer Manager na memoria
-void initBufferManager();
+/*
+    Inicializa o Buffer Manager na carga do SGBD.
+    numPages: quantidade de frames do Buffer Pool (<= 0 usa BM_DEFAULT_PAGES).
+*/
+void initBufferManager(int numPages);
+
+// Libera toda a memória do Buffer Manager ao encerrar o SGBD.
+void shutdownBufferManager();
+
+// Reduz o pin counter do frame correspondente (libera a página após o uso).
+void unpinBuffer(tp_buffer *buffer, int table_id);
+
+// Marca o frame correspondente como modificado (dirty), para o write-back.
+void markDirtyBuffer(tp_buffer *buffer, int table_id);
 
 // ALTERAÇÃO **

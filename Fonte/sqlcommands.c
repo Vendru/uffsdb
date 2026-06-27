@@ -424,19 +424,23 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
     long int offset = ftell(dados);
 
     tp_buffer *buffer;
+    int fromPool = 0; // 1 quando buffer aponta para um frame fixado do Buffer Pool
     if (objeto.lastBuffer == -1){
         buffer = initBuffer(0);
         objeto.lastBuffer = 0;
         // se o insert falhar ele atualiza aqui e é problema para os futuros inserts.
-        updateSchema(&objeto); 
+        updateSchema(&objeto);
     } else {
-        buffer = getBlock(objeto.lastBuffer, directory);
+        buffer = getBlock(objeto.lastBuffer, directory, objeto.cod);
         if(buffer == NULL) return ERRO_ABRIR_ARQUIVO;
 
         if (buffer->position + tamTupla >= SIZE) {
+            unpinBuffer(buffer, objeto.cod); // libera o frame cheio antes de trocar de página
             buffer = initBuffer(objeto.lastBuffer + 1);
             objeto.lastBuffer++;
-            updateSchema(&objeto); 
+            updateSchema(&objeto);
+        } else {
+            fromPool = 1;
         }
     }
 
@@ -513,8 +517,8 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
             while (i < strlen(auxC->valorCampo)){
                 if((auxC->valorCampo[i] < 48 || auxC->valorCampo[i] > 57) && auxC->valorCampo[i] != 45){
                     printf("ERROR: column \"%s\" expectet integer.\n", auxC->nomeCampo);
-                    fclose(dados);
-                    return ERRO_NO_TIPO_INTEIRO;
+                    erro = ERRO_NO_TIPO_INTEIRO;
+                    goto fim; // passa pela limpeza (fclose + unpin)
                 }
                 i++;
             }
@@ -573,6 +577,7 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
     DEBUG_PRINT("INSERT - Block size written in file: %d",  sizeof(tp_buffer));
 
     fim: //label para liberar a memória utilizada e fechar o arquivo de dados
+        if (fromPool) unpinBuffer(buffer, objeto.cod); // libera o frame do Buffer Pool
         fclose(dados);
     return erro;
 }
@@ -849,23 +854,23 @@ void op_delete(Lista *toDeleteTuples, char *tabelaName) {
         
     for (Nodo *temp = toDeleteTuples->prim; temp; temp = temp->prox) {
         tupla *t = (tupla *)temp->inf;
-        if(!buffer ) buffer = getBlock(t->bufferPage, directory);
+        if(!buffer ) buffer = getBlock(t->bufferPage, directory, objeto.cod);
         else if (buffer->id != t->bufferPage) {
-        // como as tuplas estão ordenadas fisicamente, isto reduz o IO. Quando o bufferpool tiver implementado, nem precisa
-            buffer->db = 0;
-            buffer->pc = 0;
+        // como as tuplas estão ordenadas fisicamente, isto reduz o IO.
             writeBufferToDisk(buffer, &objeto);
-            buffer = getBlock(t->bufferPage, directory);
+            unpinBuffer(buffer, objeto.cod); // libera o frame da página anterior
+            buffer = getBlock(t->bufferPage, directory, objeto.cod);
         }
         buffer->data[t->offset] = 1; //marca a tupla como deletada
-        buffer->db = 1; //marca a página como modificada
+        markDirtyBuffer(buffer, objeto.cod); //marca a página como modificada
         buffer->nrec--;
         countDeletedTuples++;
     }
 
-    // write the last buffer 
+    // write the last buffer
     if(buffer != NULL){
         writeBufferToDisk(buffer, &objeto);
+        unpinBuffer(buffer, objeto.cod); // libera o último frame usado
     }
     printf("DELETED %d %s\n", countDeletedTuples, (countDeletedTuples != 1) ? "rows" : "row");
 }
@@ -1048,10 +1053,11 @@ void op_update(Lista *toUpdateTuples, inf_query *query)
 
     for (Nodo *temp = toUpdateTuples->prim; temp; temp = temp->prox){
         tupla *t = (tupla *)temp->inf;
-        if(!buffer) buffer = getBlock(t->bufferPage, directory);
+        if(!buffer) buffer = getBlock(t->bufferPage, directory, objeto.cod);
         else if (buffer->id != t->bufferPage) {
             writeBufferToDisk(buffer, &objeto);
-            buffer = getBlock(t->bufferPage, directory);
+            unpinBuffer(buffer, objeto.cod); // libera o frame da página anterior
+            buffer = getBlock(t->bufferPage, directory, objeto.cod);
         }
 
         int offsetVal = 0;
@@ -1081,7 +1087,7 @@ void op_update(Lista *toUpdateTuples, inf_query *query)
                 }
                 valNode = valNode->prox;
             }
-            buffer[t->bufferPage].db = 1; // marca a página como modificada
+            markDirtyBuffer(buffer, objeto.cod); // marca a página como modificada
             offsetVal += tamanho;
         }
 
@@ -1089,6 +1095,7 @@ void op_update(Lista *toUpdateTuples, inf_query *query)
     }
 
     writeBufferToDisk(buffer, &objeto);
+    unpinBuffer(buffer, objeto.cod); // libera o último frame usado
 
     printf("UPDATED %d %s\n", countUpdateTuples, (countUpdateTuples != 1) ? "rows" : "row");
 }
