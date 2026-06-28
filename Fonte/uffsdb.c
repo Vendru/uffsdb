@@ -19,6 +19,9 @@
 #ifndef FDATABASE
    #include "database.h"
 #endif
+#ifndef FBUFFER
+   #include "buffer.h"
+#endif
 
 #include "interface/y.tab.h"
 
@@ -27,7 +30,8 @@ db_connected connected;
 
 int main(){
     dbInit(NULL);
-    
+    bm_init();   // inicializa o Buffer Manager na carga do SGBD
+
     printf("uffsdb (16.2).\nType \"help\" for help or \"implement\" for seeing what is or not is implemented in this project.\n\n");
     
     DEBUG_PRINT("UFFS DB Debugging mode.");

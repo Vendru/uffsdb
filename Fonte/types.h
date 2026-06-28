@@ -51,15 +51,52 @@ typedef struct table{ // Estrutura utilizada para criar uma tabela.
     tp_table *esquema;              // Esquema de campos da tabela.
 }table;
 
-typedef struct tp_buffer{ // Estrutura utilizada para armazenar o buffer.
-    unsigned int id;        // posição do bloco no arquivo em relação aos outros blocos [0,1,2,...[
-    unsigned int nrec;       //Número de registros armazenados na página.
-    uint32_t position;   // Número da quantidade de registro que a página ainda pode receber;
-    // TODO: Separar a struct o que precisar ser persistida e o que fica na memória
-    unsigned char db;        //Dirty bit
-    unsigned char pc;        //Pin counter
-    char data[SIZE];         // Dados
+/* tp_buffer: conteúdo de uma PÁGINA do Buffer Pool.
+   Os três primeiros campos (id, nrec, position) formam o CABEÇALHO DA PÁGINA e são
+   persistidos em disco junto com os bytes de data[]. Os campos db/pc são apenas de
+   memória (não vão para o disco). Toda E/S de disco desta página é feita pelo BM. */
+typedef struct tp_buffer{ // Estrutura utilizada para armazenar uma página do buffer.
+    unsigned int id;         // Número da página no arquivo da tabela [0,1,2,...[ (header)
+    unsigned int nrec;       // Número de registros armazenados na página.        (header)
+    uint32_t position;       // Offset livre na página (bytes já ocupados).       (header)
+    unsigned char db;        // Dirty bit (apenas memória).
+    unsigned char pc;        // Pin counter (apenas memória).
+    char data[BM_PAGE_CAPACITY]; // Dados da página (usa-se até page_size bytes).
 }tp_buffer;
+
+/* PAGE_HEADER_DISK_SIZE: bytes do cabeçalho da página gravados em disco
+   (id + nrec + position). O bloco em disco = cabeçalho + page_size bytes de dados. */
+#define PAGE_HEADER_DISK_SIZE (3 * sizeof(uint32_t))
+
+/* BufferFrame: MOLDURA do Buffer Pool. Guarda a página carregada mais os
+   metadados de gerência mantidos em memória pelo Buffer Manager. */
+typedef struct BufferFrame {
+    tp_buffer     page;                       // Página carregada nesta moldura.
+    char          filename[LEN_DB_NAME_IO];   // Arquivo de origem ("" = moldura livre).
+    int           page_id;                    // Página do arquivo (-1 = moldura livre).
+    unsigned char valid;                      // 1 se a moldura está ocupada.
+    unsigned char dirty;                      // 1 se a página foi modificada (precisa gravar).
+    int           pin;                        // Contador de pinos (página em uso).
+} BufferFrame;
+
+/* BufferPoolHeader: CABEÇALHO/metadados do Buffer Pool. */
+typedef struct BufferPoolHeader {
+    uint32_t num_frames;   // Número de páginas (frames) do pool   [configurável].
+    uint32_t page_size;    // Tamanho de cada página em bytes      [configurável].
+    uint32_t frames_used;  // Quantidade de molduras ocupadas no momento.
+    uint64_t hits;         // Acessos atendidos pelo pool (sem ir ao disco).
+    uint64_t misses;       // Acessos que exigiram leitura de disco.
+    uint64_t reads;        // Operações de fread realizadas.
+    uint64_t writes;       // Operações de fwrite realizadas.
+    uint64_t evictions;    // Substituições (páginas removidas do pool).
+} BufferPoolHeader;
+
+/* BufferManager: o Gerenciador de Buffer (instância global única). */
+typedef struct BufferManager {
+    BufferPoolHeader header;       // Metadados do Buffer Pool.
+    BufferFrame     *frames;       // Vetor de molduras (o Buffer Pool em si).
+    unsigned char    initialized;  // 1 após bm_init().
+} BufferManager;
 
 typedef struct rc_insert {
     char    *objName;           // Nome do objeto (tabela, banco de dados, etc...)
@@ -160,6 +197,7 @@ union c_int{
 **************************************  VARIAVEIS GLOBAIS  **************************************/
 
 extern db_connected connected;
+extern BufferManager bufferManager; // Gerenciador de Buffer global (ver buffer.c).
 
 /************************************************************************************************
  ************************************************************************************************/

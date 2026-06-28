@@ -321,7 +321,6 @@ int verificaChavePK(char *nomeTabela, column *c, char *nomeCampo, char *valorCam
 int finalizaInsert(char *nome, column *c, int tamTupla){
     column *auxC, *temp;
     int i = 0, x = 0, t, erro, encontrou, j = 0, flag=0;
-    FILE *dados;
     nodo *raiz = NULL;
     nodo *raizfk = NULL;
 
@@ -417,30 +416,32 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
     strcpy(directory, connected.db_directory);
     strcat(directory, dicio.nArquivo);
 
-    if((dados = fopen(directory,"r+b")) == NULL){
-        printf("ERROR: cannot open file.\n");
-        return ERRO_ABRIR_ARQUIVO;
-	}
-    long int offset = ftell(dados);
+    // Todo o acesso ao arquivo de dados passa pelo Buffer Manager (BM).
+    long int offset = 0;            // endereço usado pelo índice (mantém comportamento anterior)
 
     tp_buffer *buffer;
+    int pageId;
     if (objeto.lastBuffer == -1){
-        buffer = initBuffer(0);
+        pageId = 0;
+        buffer = bm_new_page(directory, pageId);   // primeira página da tabela
         objeto.lastBuffer = 0;
         // se o insert falhar ele atualiza aqui e é problema para os futuros inserts.
-        updateSchema(&objeto); 
+        updateSchema(&objeto);
     } else {
-        buffer = getBlock(objeto.lastBuffer, directory);
+        pageId = objeto.lastBuffer;
+        buffer = getBlock(objeto.lastBuffer, directory);   // página vai para o pool, pinada
+        if(buffer == NULL) buffer = bm_new_page(directory, pageId);
         if(buffer == NULL) return ERRO_ABRIR_ARQUIVO;
 
-        if (buffer->position + tamTupla >= SIZE) {
-            buffer = initBuffer(objeto.lastBuffer + 1);
+        if (buffer->position + tamTupla >= bufferManager.header.page_size) {
+            bm_unpin(directory, pageId, 0);        // libera a página cheia
+            pageId = objeto.lastBuffer + 1;
+            buffer = bm_new_page(directory, pageId);
             objeto.lastBuffer++;
-            updateSchema(&objeto); 
+            updateSchema(&objeto);
         }
     }
-
-    // fputc(0, dados); // flag para tupla não deletada
+    if(buffer == NULL) return ERRO_ABRIR_ARQUIVO;
 
     char* bufferTuple = (char *)uffslloc(tamTupla);
     bufferTuple[0] = 0;
@@ -513,8 +514,8 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
             while (i < strlen(auxC->valorCampo)){
                 if((auxC->valorCampo[i] < 48 || auxC->valorCampo[i] > 57) && auxC->valorCampo[i] != 45){
                     printf("ERROR: column \"%s\" expectet integer.\n", auxC->nomeCampo);
-                    fclose(dados);
-                    return ERRO_NO_TIPO_INTEIRO;
+                    erro = ERRO_NO_TIPO_INTEIRO;
+                    goto fim;
                 }
                 i++;
             }
@@ -568,12 +569,11 @@ int finalizaInsert(char *nome, column *c, int tamTupla){
     memcpy(buffer->data + buffer->position, bufferTuple, tamTupla);
     buffer->position += tamTupla;
     DEBUG_PRINT("INSERT - Tuple size written in file: %d", tamTupla);
-    fseek(dados, buffer->id * sizeof(tp_buffer), SEEK_SET);
-    fwrite(buffer, sizeof(tp_buffer), 1, dados);
-    DEBUG_PRINT("INSERT - Block size written in file: %d",  sizeof(tp_buffer));
+    bm_unpin(directory, pageId, 1);   // página modificada: o BM a grava no disco
+    return erro;
 
-    fim: //label para liberar a memória utilizada e fechar o arquivo de dados
-        fclose(dados);
+    fim: //libera a página pinada também nos caminhos de erro
+        bm_unpin(directory, pageId, 0);
     return erro;
 }
 
@@ -847,15 +847,15 @@ void op_delete(Lista *toDeleteTuples, char *tabelaName) {
     strcpy(directory, connected.db_directory);
     strcat(directory, objeto.nArquivo);
         
+    int curPage = -1;
     for (Nodo *temp = toDeleteTuples->prim; temp; temp = temp->prox) {
         tupla *t = (tupla *)temp->inf;
-        if(!buffer ) buffer = getBlock(t->bufferPage, directory);
-        else if (buffer->id != t->bufferPage) {
-        // como as tuplas estão ordenadas fisicamente, isto reduz o IO. Quando o bufferpool tiver implementado, nem precisa
-            buffer->db = 0;
-            buffer->pc = 0;
-            writeBufferToDisk(buffer, &objeto);
+        if(buffer == NULL || curPage != (int)t->bufferPage) {
+            // troca de página: libera a anterior (suja) e pega a próxima pelo BM
+            if(buffer != NULL) bm_unpin(directory, curPage, 1);
             buffer = getBlock(t->bufferPage, directory);
+            curPage = t->bufferPage;
+            if(buffer == NULL) continue;
         }
         buffer->data[t->offset] = 1; //marca a tupla como deletada
         buffer->db = 1; //marca a página como modificada
@@ -863,9 +863,9 @@ void op_delete(Lista *toDeleteTuples, char *tabelaName) {
         countDeletedTuples++;
     }
 
-    // write the last buffer 
+    // libera (suja) a última página usada; o BM grava no disco
     if(buffer != NULL){
-        writeBufferToDisk(buffer, &objeto);
+        bm_unpin(directory, curPage, 1);
     }
     printf("DELETED %d %s\n", countDeletedTuples, (countDeletedTuples != 1) ? "rows" : "row");
 }
@@ -1046,12 +1046,14 @@ void op_update(Lista *toUpdateTuples, inf_query *query)
     strcpy(directory, connected.db_directory);
     strcat(directory, objeto.nArquivo);
 
+    int curPage = -1;
     for (Nodo *temp = toUpdateTuples->prim; temp; temp = temp->prox){
         tupla *t = (tupla *)temp->inf;
-        if(!buffer) buffer = getBlock(t->bufferPage, directory);
-        else if (buffer->id != t->bufferPage) {
-            writeBufferToDisk(buffer, &objeto);
+        if(buffer == NULL || curPage != (int)t->bufferPage) {
+            if(buffer != NULL) bm_unpin(directory, curPage, 1);
             buffer = getBlock(t->bufferPage, directory);
+            curPage = t->bufferPage;
+            if(buffer == NULL) continue;
         }
 
         int offsetVal = 0;
@@ -1081,14 +1083,15 @@ void op_update(Lista *toUpdateTuples, inf_query *query)
                 }
                 valNode = valNode->prox;
             }
-            buffer[t->bufferPage].db = 1; // marca a página como modificada
+            buffer->db = 1; // marca a página como modificada
             offsetVal += tamanho;
         }
 
         countUpdateTuples++;
     }
 
-    writeBufferToDisk(buffer, &objeto);
+    // libera (suja) a última página usada; o BM grava no disco
+    if(buffer != NULL) bm_unpin(directory, curPage, 1);
 
     printf("UPDATED %d %s\n", countUpdateTuples, (countUpdateTuples != 1) ? "rows" : "row");
 }

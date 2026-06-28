@@ -24,6 +24,9 @@
 #ifndef FSQLCOMMANDS
    #include "../sqlcommands.h"
 #endif
+#ifndef FBUFFER
+   #include "../buffer.h"
+#endif
 #ifndef FPARSER
    #include "parser.h"
 #endif
@@ -61,6 +64,7 @@ void invalidCommand(char *command) {
 
 void quit(int flag){
     write_history("data/history.txt");
+    bm_shutdown();          // grava as páginas sujas do Buffer Pool no disco
     destroyMemoryContext();
     exit(flag);
 };

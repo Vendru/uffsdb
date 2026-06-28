@@ -47,8 +47,19 @@
 #define FK 2
 #define BT 3
 ////
-#define SIZE 1024                // Tamanho da página.
-#define PAGES 256              // Número de páginas.
+#define SIZE 1024                // Tamanho (default) da página de dados, em bytes.
+#define PAGES 256              // Número (legado) de páginas.
+
+/* ----------------------------- Buffer Manager (BM) ----------------------------
+   Capacidade máxima de uma página em memória (limite superior para page_size).
+   O page_size efetivo é definido na carga do SGBD (uffsdb.conf) e pode ser menor.
+   Mudar BM_PAGE_CAPACITY exige recriar os arquivos de dados das tabelas.        */
+#define BM_PAGE_CAPACITY      8192   // Capacidade máxima do vetor data[] da página.
+#define BM_DEFAULT_PAGE_SIZE  SIZE   // Tamanho de página default (bytes de dados).
+#define BM_DEFAULT_POOL_PAGES 16     // Número default de frames do Buffer Pool.
+#define BM_MIN_POOL_PAGES     1      // Mínimo de frames aceito.
+#define BM_CONFIG_FILE "data/uffsdb.conf" // Arquivo de configuração lido na carga.
+/* ------------------------------------------------------------------------------ */
 #define TAMANHO_NOME_CAMPO 40   // Tamanho do nome dos campos de uma tabela.
 #define TAMANHO_NOME_CONSTRAINT 40 // Tamanho do nome da constraint.
 #define TAMANHO_NOME_TABELA 20  // Tamanho do nome da tabela.

@@ -1,0 +1,22 @@
+# ============================================================================
+#  Configuração do Buffer Manager (BM) do UFFSDB
+# ----------------------------------------------------------------------------
+#  Estes parâmetros são lidos na CARGA do SGBD a partir de "data/uffsdb.conf".
+#  Se o arquivo não existir, ele é criado automaticamente com os valores padrão.
+#
+#  Para usar: copie este arquivo para data/uffsdb.conf e ajuste os valores.
+#      cp uffsdb.conf.example data/uffsdb.conf
+#
+#  Formato aceito: "chave valor" ou "chave = valor". '#' inicia um comentário.
+# ============================================================================
+
+# Tamanho de cada página do Buffer Pool, em bytes.
+#   - é também o tamanho do bloco de dados gravado em disco
+#   - máximo permitido: BM_PAGE_CAPACITY (8192) — ver macros.h
+#   - ATENÇÃO: mudar o page_size exige recriar os arquivos de dados das tabelas
+page_size = 1024
+
+# Número de páginas (frames) que o Buffer Pool mantém em memória.
+#   - quanto maior, menos acessos a disco (e maior uso de RAM)
+#   - mínimo: 1
+pool_pages = 16

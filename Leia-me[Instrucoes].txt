@@ -1,3 +1,61 @@
+##############LEIA-ME PARTE 7 #############################################################################################################
+
+=> junho de 2026 <=
+
+Universidade Federal da Fronteira Sul – UFFS
+Curso: Ciência da Computação
+Componente Curricular: Banco de Dados II
+Professor: Dr. Denio Duarte
+=============================================================================================================================================
+
+GERENCIADOR DE BUFFER (Buffer Manager - BM)
+
+Foi implementado um Gerenciador de Buffer (BM) de verdade, com um Buffer Pool de páginas em
+memória. A partir de agora, o BM é o ÚNICO componente do SGBD que faz E/S de disco (fread/fwrite)
+nos arquivos de dados das tabelas. A aplicação SEMPRE trabalha sobre as páginas que estão no
+Buffer Pool; quando uma página não está no pool, o BM a carrega do disco.
+
+1) Inicialização na carga
+   - O BM é iniciado em main() (uffsdb.c) através de bm_init(), logo após dbInit().
+   - Ao sair (\q / EXIT), o BM grava todas as páginas sujas no disco (bm_shutdown(), chamado em
+     quit() e também registrado via atexit() como garantia).
+
+2) Estruturas (ver types.h)
+   - PageHeader (conceitual): os campos id, nrec e position do tp_buffer formam o cabeçalho da
+     PÁGINA, que é persistido em disco junto com os bytes de dados.
+   - BufferFrame: a MOLDURA do pool. Guarda a página carregada e os metadados de gerência em
+     memória: arquivo de origem, número da página, bit de validade, dirty bit e contador de pinos.
+   - BufferPoolHeader: CABEÇALHO/metadados do Buffer Pool: num_frames, page_size, frames_used,
+     hits, misses, reads, writes e evictions (estatísticas).
+   - BufferManager: instância global (bufferManager) com o header do pool + o vetor de molduras.
+
+3) Tamanho e quantidade de páginas (CONFIGURÁVEIS NA CARGA)
+   - Lidos do arquivo data/uffsdb.conf na inicialização (ver uffsdb.conf.example):
+         page_size  = 1024     # tamanho de cada página em bytes (máx. 8192)
+         pool_pages = 16       # número de páginas/molduras do Buffer Pool
+   - Se o arquivo não existir, ele é criado automaticamente com os valores padrão.
+   - Defaults (macros.h): BM_DEFAULT_PAGE_SIZE = 1024, BM_DEFAULT_POOL_PAGES = 16.
+   - O bloco gravado em disco tem o tamanho: cabeçalho (12 bytes) + page_size bytes de dados.
+   - ATENÇÃO: ao mudar o page_size, os arquivos de dados existentes precisam ser recriados
+     (use 'make clean' para limpar o diretório data/).
+
+4) Política de substituição: ALEATÓRIA (random replacement)
+   - Quando o pool está cheio e é preciso carregar uma nova página, o BM escolhe uma moldura
+     ALEATÓRIA entre as que NÃO estão pinadas (em uso). Não usa LRU nem MRU.
+   - Se a moldura escolhida estiver suja, ela é gravada no disco antes de ser substituída.
+
+5) API do BM (ver buffer.h)
+   - bm_init(), bm_shutdown()
+   - bm_get_page(arquivo, pagina)   -> retorna a página no pool, pinada (carrega do disco no miss)
+   - bm_new_page(arquivo, pagina)   -> cria página nova e vazia no pool, pinada
+   - bm_unpin(arquivo, pagina, suja)-> libera um pino; marca a página como suja se 'suja' != 0
+   - bm_flush_all()                 -> grava todas as páginas sujas no disco
+   - bm_print_stats()               -> imprime os metadados/estatísticas do Buffer Pool
+   As funções getBlock/getPage/writeBufferToDisk foram reescritas para usar o BM, e os comandos
+   INSERT, DELETE e UPDATE deixaram de abrir o arquivo de dados diretamente.
+
+
+
 ##############LEIA-ME PARTE 6 #############################################################################################################
 
 => 16 de fevereiro de 2025 <=
