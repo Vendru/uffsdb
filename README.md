@@ -32,22 +32,22 @@ You can edit the following files: `parser.h`, `parser.c`, `lex.l`, and `yacc.y`.
 
 # Buffer Manager
 
-The project includes a Buffer Manager (BM) layer to keep database pages in memory and reduce direct disk access. It starts with the DBMS in `Fonte/uffsdb.c` and is released when the program ends.
+O projeto inclui uma camada de Buffer Manager (BM) para manter páginas do banco de dados na memória e reduzir o acesso direto ao disco. Ele é iniciado junto com o SGBD em `Fonte/uffsdb.c` e liberado quando o programa termina.
 
-## Implementation
-The BM uses two main structures:
-- `tp_buffer`, which stores the pages loaded in memory.
-- `tp_metadados`, which stores the state of each frame, including `table_id`, dirty bit (`db`), and pin counter (`pc`).
+## Implementação
+O BM usa duas estruturas principais:
+- `tp_buffer`, que armazena as páginas carregadas na memória.
+- `tp_metadados`, que armazena o estado de cada frame, incluindo `table_id`, bit sujo (`db`) e contador de pin (`pc`).
 
-When a page is requested, the BM first checks whether it is already in memory. If it is, the frame is reused and the pin counter is increased. If not, the BM looks for a free frame. When a dirty page needs to be replaced, it is written back to disk before the new page is loaded.
+Quando uma página é solicitada, o BM primeiro verifica se ela já está na memória. Se estiver, o frame é reutilizado e o contador de pin é incrementado. Caso contrário, o BM procura um frame livre. Quando uma página suja precisa ser substituída, ela é gravada de volta no disco antes de a nova página ser carregada.
 
-## LRU
-The replacement policy used is **LRU (Least Recently Used)**. This helps keep recently used pages in memory, which improves performance when access patterns show temporal locality.
+## Política de Substituição
+A política de substituição usada pelo Buffer Manager é **aleatória** entre frames que não estão fixados (`pc == 0`). O BM primeiro tenta usar um frame livre. Se não houver nenhum disponível, ele escolhe uma vítima aleatoriamente. Quando o frame vítima está sujo (`db == 1`), seu conteúdo é gravado de volta no disco antes de a nova página ser carregada.
 
-## Buffer Size
-The number of frames in the Buffer Pool is configured in `Fonte/macros.h`.
+## Tamanho do Buffer
+A quantidade de frames no Buffer Pool é configurada em `Fonte/macros.h`.
 
-To change the default size, edit the `BM_DEFAULT_PAGES` macro:
+Para alterar o tamanho padrão, edite a macro `BM_DEFAULT_PAGES`:
 ```c
 #define BM_DEFAULT_PAGES 60
 ```
