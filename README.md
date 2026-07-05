@@ -51,3 +51,24 @@ Para alterar o tamanho padrão, edite a macro `BM_DEFAULT_PAGES`:
 ```c
 #define BM_DEFAULT_PAGES 60
 ```
+
+Também é possível sobrescrever o tamanho na carga do SGBD, sem recompilar, pela variável de ambiente `UFFSDB_BM_PAGES`:
+```bash
+UFFSDB_BM_PAGES=100 ./uffsdb
+```
+
+## Como Testar
+A pasta `Testes/` contém uma demonstração que cria um banco a partir do zero (`CREATE DATABASE`, tabelas com PK/FK, 53 inserts, consultas, violações de integridade, `UPDATE` e `DELETE`).
+
+Para rodar com o pool padrão (60 frames):
+```bash
+cd Testes
+./roda_apresentacao.sh
+```
+
+Para forçar a substituição aleatória de páginas (pool de apenas 2 frames para ~4 páginas de dados):
+```bash
+UFFSDB_BM_PAGES=2 ./roda_apresentacao.sh
+```
+
+O resultado deve ser idêntico nas duas execuções: os dois `INSERT` de integridade devem falhar (PK duplicada e FK inexistente), o `UPDATE` deve refletir na consulta seguinte e o `DELETE` deve retornar `0 Rows` na releitura. O script apaga a pasta `data/` antes de começar, garantindo a criação do banco do zero.
